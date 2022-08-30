@@ -12,6 +12,7 @@
 @interface DAYCalendarView : UIControl
 
 @property (copy, nonatomic) NSDate *selectedDate;
+@property (copy, nonatomic) NSTimeZone *timeZone;
 
 @property (copy, nonatomic) NSArray<NSString *> *localizedStringsOfWeekday;
 
@@ -22,12 +23,15 @@
 @property (copy, nonatomic) UIColor *highlightedComponentTextColor;
 @property (copy, nonatomic) UIColor *selectedIndicatorColor;
 @property (copy, nonatomic) UIColor *todayIndicatorColor;
+@property (copy, nonatomic) UIColor *arrowButtonColor;
 @property (assign, nonatomic) CGFloat indicatorRadius;
 @property (assign, nonatomic) BOOL boldPrimaryComponentText;
 @property (assign, nonatomic) BOOL singleRowMode;
 
 // Additional features:
 @property (assign, nonatomic) BOOL showUserEvents;
+
+- (instancetype)initWithFrame:(CGRect)frame timeZone:(NSTimeZone*)timezone andDate:(NSDate*)date;
 
 - (void)reloadViewAnimated:(BOOL)animated;   // Invalidate the original view, use it after changing the appearance settings.
 

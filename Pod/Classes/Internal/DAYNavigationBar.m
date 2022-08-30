@@ -11,8 +11,6 @@
 @interface DAYNavigationBar ()
 
 @property (strong, nonatomic) UILabel *textLabel;
-@property (strong, nonatomic) UIButton *prevButton;
-@property (strong, nonatomic) UIButton *nextButton;
 
 @property (readwrite, assign, nonatomic) DAYNaviagationBarCommand lastCommand;
 
@@ -33,7 +31,7 @@
 {
     self = [super initWithFrame:frame];
     if (self) {
-        [self commonInit];
+        //[self commonInit];
     }
     return self;
 }
@@ -62,7 +60,7 @@
     
     self.prevButton = [UIButton buttonWithType:UIButtonTypeCustom];
     self.prevButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.prevButton.tintColor = [UIColor grayColor];
+    self.prevButton.tintColor = [UIColor darkGrayColor];
     [self.prevButton setBackgroundImage:[[UIImage imageNamed:@"prev"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
     [self.prevButton addTarget:self action:@selector(prevButtonDidTap:) forControlEvents:UIControlEventTouchUpInside];
     
@@ -99,7 +97,7 @@
     
     self.nextButton = [UIButton buttonWithType:UIButtonTypeCustom];
     self.nextButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.nextButton.tintColor = [UIColor grayColor];
+    self.nextButton.tintColor = [UIColor darkGrayColor];
     [self.nextButton setBackgroundImage:[[UIImage imageNamed:@"next"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
     [self.nextButton addTarget:self action:@selector(nextButtonDidTap:) forControlEvents:UIControlEventTouchUpInside];
     
@@ -140,8 +138,11 @@
 }
 
 - (void)nextButtonDidTap:(id)sender {
-    self.lastCommand = DAYNaviagationBarCommandNext;
-    [self sendActionsForControlEvents:UIControlEventValueChanged];
+    if(self.nextButton.isEnabled)
+    {
+        self.lastCommand = DAYNaviagationBarCommandNext;
+        [self sendActionsForControlEvents:UIControlEventValueChanged];
+    }
 }
 
 @end

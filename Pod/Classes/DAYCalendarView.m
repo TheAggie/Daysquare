@@ -27,6 +27,8 @@
 @property (strong, nonatomic) DAYIndicatorView *todayIndicatorView;
 @property (strong, nonatomic) NSMutableArray<DAYComponentView *> *componentViews;
 
+@property (strong, nonatomic) NSDateComponents *tappedDateComponents;
+
 @property (readonly, copy) NSString *navigationBarTitle;
 
 @property (strong, nonatomic) EKEventStore *eventStore;
@@ -61,7 +63,7 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
-        [self commonInit];
+        [self commonInitWithoutDate];
     }
     return self;
 }
@@ -69,7 +71,15 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        [self commonInit];
+        [self commonInitWithoutDate];
+    }
+    return self;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame timeZone:(NSTimeZone*)timezone andDate:(NSDate*)date{
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self commonInitWithTimeZone:timezone andDate:date];
     }
     return self;
 }
@@ -77,19 +87,36 @@
 - (instancetype)initWithCoder:(NSCoder *)aDecoder {
     self = [super initWithCoder:aDecoder];
     if (self) {
-        [self commonInit];
+        [self commonInitWithoutDate];
     }
     return self;
 }
 
+- (void)commonInitWithTimeZone:(NSTimeZone*)timezone andDate:(NSDate*)date
+{
+    self.timeZone = timezone;
+    NSDateComponents *comps = [self dateComponentsFromDate:date];
+    self->_visibleYear = comps.year;
+    self->_visibleMonth = comps.month;
+
+    [self commonInit];
+}
+
+- (void)commonInitWithoutDate
+{
+    // Set visible viewport to one contains today by default.
+    NSDate *todayDate = [NSDate dateWithTimeIntervalSinceNow:0];
+    NSDateComponents *comps = [self dateComponentsFromDate:todayDate];
+    self->_visibleYear = comps.year;
+    self->_visibleMonth = comps.month;
+
+    [self commonInit];
+}
+
+
 - (void)commonInit {
     self.clipsToBounds = YES;
     
-    // Set visible viewport to one contains today by default.
-    NSDate *todayDate = [NSDate dateWithTimeIntervalSinceNow:0];
-    NSDateComponents *comps = [DAYUtils dateComponentsFromDate:todayDate];
-    self->_visibleYear = comps.year;
-    self->_visibleMonth = comps.month;
     
     // Initialize default appearance settings.
     self.weekdayHeaderTextColor = [UIColor colorWithRed:0.40 green:0.40 blue:0.40 alpha:1];
@@ -105,6 +132,8 @@
     self.navigationBar.translatesAutoresizingMaskIntoConstraints = NO;
     self.navigationBar.textLabel.text = self.navigationBarTitle;
     [self.navigationBar addTarget:self action:@selector(navigationBarButtonDidTap:) forControlEvents:UIControlEventValueChanged];
+//    [self.navigationBar.nextButton setTintColor:self.arrowButtonColor];
+//    [self.navigationBar.prevButton setTintColor:self.arrowButtonColor];
     
     [self addSubview:self.navigationBar];
     [self addConstraint:[NSLayoutConstraint constraintWithItem:self.navigationBar
@@ -246,16 +275,54 @@
 }
 
 - (void)setSelectedDate:(NSDate *)selectedDate {
-    NSDateComponents *comps = [DAYUtils dateComponentsFromDate:selectedDate];
-    int64_t delayTime = 0;
-    if (self->_visibleMonth != comps.month || self->_visibleYear != comps.year) {
-        [self jumpToMonth:comps.month year:comps.year];
-        delayTime = 400;
+    NSDateComponents *comps = [self dateComponentsFromDate:selectedDate];
+    
+    NSDate *currentDate = [NSDate date];
+    
+    comps.calendar = [self localCalendar];
+    
+    NSDate *proposedDate = [comps date];
+    
+    NSTimeInterval timeIntervalSinceDate =  [proposedDate timeIntervalSinceDate:currentDate];
+    
+    if((timeIntervalSinceDate < 0 ))
+    {
+
+        int64_t delayTime = 0;
+        if (self->_visibleMonth != comps.month || self->_visibleYear != comps.year) {
+            [self jumpToMonth:comps.month year:comps.year];
+            delayTime = 400;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayTime * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            [self componentDidTap:[self componentViewForDateComponents:comps]];
+            [self updateCurrentVisibleRow];
+        });
+        
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayTime * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        [self componentDidTap:[self componentViewForDateComponents:comps]];
-        [self updateCurrentVisibleRow];
-    });
+    
+    NSUInteger nextMonth;
+    NSUInteger nextYear;
+    
+    if (self->_visibleMonth >= 12) {
+        nextMonth = 1;
+        nextYear = self->_visibleYear + 1;
+    }
+    else {
+        nextMonth = self->_visibleMonth + 1;
+        nextYear = self->_visibleYear;
+    }
+    
+    NSInteger currentYear = [comps.calendar component:NSCalendarUnitYear fromDate:currentDate];
+    NSInteger currentMonth = [comps.calendar component:NSCalendarUnitMonth fromDate:currentDate];
+    
+    BOOL enableNextButton = ((nextYear < currentYear) || ((nextYear == currentYear) && (nextMonth <= currentMonth)));
+    
+    UIButton *nextButton = self.navigationBar.nextButton;
+    
+    [nextButton setAlpha:(enableNextButton?1.0:0.0)];
+    [nextButton setEnabled:enableNextButton];
+    [nextButton setHidden:!enableNextButton];
+    
 }
 
 - (void)makeUIElements {
@@ -340,7 +407,7 @@
     comps.month = month;
     comps.year = year;
     
-    if ([DAYUtils isDateTodayWithDateComponents:comps]) {
+    if ([self isDateTodayWithDateComponents:comps]) {
         if (self.todayIndicatorView.hidden) {
             self.todayIndicatorView.hidden = NO;
             self.todayIndicatorView.transform = CGAffineTransformMakeScale(0, 0);
@@ -350,21 +417,13 @@
         }
         self.todayIndicatorView.attachingView = view;
         [self addConstraintToCenterIndicatorView:self.todayIndicatorView toView:view];
-        
-        // by Rakuyo. Solves the problem that default row is not the current date's row in single line mode
-        if (self->_currentVisibleRow == 0) {
-            NSUInteger paddingDays = [DAYUtils firstWeekdayInMonth:self->_visibleMonth ofYear:self->_visibleYear] - 1;
-            
-            float result = (day - paddingDays) / 7;
-            self->_currentVisibleRow = floor(result) == result?(result - 1):floor(result);
-        }
     }
     
     view.containingEvent = nil;
     if (self.showUserEvents) {
         [self->_eventsInVisibleMonth enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
             EKEvent *event = obj;
-            if ([[DAYUtils dateFromDateComponents:comps] isEqualToDate:event.startDate]) {
+            if ([[self dateFromDateComponents:comps] isEqualToDate:event.startDate]) {
                 view.containingEvent = event;
                 *stop = YES;
                 return;
@@ -395,8 +454,8 @@
 - (void)configureContentView {
     NSUInteger pointer = 0;
     
-    NSUInteger totalDays = [DAYUtils daysInMonth:self->_visibleMonth ofYear:self->_visibleYear];
-    NSUInteger paddingDays = [DAYUtils firstWeekdayInMonth:self->_visibleMonth ofYear:self->_visibleYear] - 1;
+    NSUInteger totalDays = [self daysInMonth:self->_visibleMonth ofYear:self->_visibleYear];
+    NSUInteger paddingDays = [self firstWeekdayInMonth:self->_visibleMonth ofYear:self->_visibleYear] - 1;
     
     // Handle user events displaying.
     if (self.showUserEvents) {
@@ -410,8 +469,8 @@
         endComps.month = self->_visibleMonth;
         endComps.day = totalDays;
         
-        NSPredicate *predicate = [self.eventStore predicateForEventsWithStartDate:[DAYUtils dateFromDateComponents:startComps]
-                                                                          endDate:[DAYUtils dateFromDateComponents:endComps]
+        NSPredicate *predicate = [self.eventStore predicateForEventsWithStartDate:[self dateFromDateComponents:startComps]
+                                                                          endDate:[self dateFromDateComponents:endComps]
                                                                         calendars:nil];
         self->_eventsInVisibleMonth = [self.eventStore eventsMatchingPredicate:predicate];
     }
@@ -422,10 +481,10 @@
     // Make padding days.
     NSUInteger paddingYear = self->_visibleMonth == 1 ? self->_visibleYear - 1 : self->_visibleYear;
     NSUInteger paddingMonth = self->_visibleMonth == 1 ? 12 : self->_visibleMonth - 1;
-    NSUInteger totalDaysInLastMonth = [DAYUtils daysInMonth:paddingMonth ofYear:paddingYear];
+    NSUInteger totalDaysInLastMonth = [self daysInMonth:paddingMonth ofYear:paddingYear];
     
-    for (int j = (int) paddingDays - 1; j >= 0; j--) {
-        [self configureComponentView:self.componentViews[pointer++] withDay:totalDaysInLastMonth - j month:paddingMonth year:paddingYear];
+    for (int j = 0; j < paddingDays; j++) {
+        [self configureComponentView:self.componentViews[pointer++] withDay:(totalDaysInLastMonth - (paddingDays - (j+1))) month:paddingMonth year:paddingYear];
     }
     
     // Make days in current month.
@@ -450,19 +509,19 @@
     }];
     
     [self.contentWrapperView addConstraint:[NSLayoutConstraint constraintWithItem:view
-                                                                        attribute:NSLayoutAttributeCenterX
-                                                                        relatedBy:NSLayoutRelationEqual
-                                                                           toItem:toView
-                                                                        attribute:NSLayoutAttributeCenterX
-                                                                       multiplier:1.0
-                                                                         constant:0]];
+                                                          attribute:NSLayoutAttributeCenterX
+                                                          relatedBy:NSLayoutRelationEqual
+                                                             toItem:toView
+                                                          attribute:NSLayoutAttributeCenterX
+                                                         multiplier:1.0
+                                                           constant:0]];
     [self.contentWrapperView addConstraint:[NSLayoutConstraint constraintWithItem:view
-                                                                        attribute:NSLayoutAttributeCenterY
-                                                                        relatedBy:NSLayoutRelationEqual
-                                                                           toItem:toView
-                                                                        attribute:NSLayoutAttributeCenterY
-                                                                       multiplier:1.0
-                                                                         constant:0]];
+                                                          attribute:NSLayoutAttributeCenterY
+                                                          relatedBy:NSLayoutRelationEqual
+                                                             toItem:toView
+                                                          attribute:NSLayoutAttributeCenterY
+                                                         multiplier:1.0
+                                                           constant:0]];
     [view addConstraint:[NSLayoutConstraint constraintWithItem:view
                                                      attribute:NSLayoutAttributeWidth
                                                      relatedBy:NSLayoutRelationEqual
@@ -515,45 +574,71 @@
 - (void)componentDidTap:(DAYComponentView *)sender {
     NSDateComponents *comps = sender.representedObject;
     
-    if (comps.year != self->_visibleYear || comps.month != self->_visibleMonth) {
-        [self jumpToMonth:comps.month year:comps.year];
-        return;
-    }
+    self.tappedDateComponents = [comps copy];
     
-    // by Rakuyo. Solves the problem that switch error in single line mode
-    if (self.selectedIndicatorView.hidden || self.selectedIndicatorView.alpha == 0) {
+    NSDate *currentDate = [NSDate date];
+    
+    comps.calendar = [self localCalendar];
+    
+    NSDate *proposedDate = [comps date];
+    
+    NSTimeInterval timeIntervalSinceDate =  [proposedDate timeIntervalSinceDate:currentDate];
+    
+    if((timeIntervalSinceDate < 0 ))
+    {
+        
+        if (comps.year != self->_visibleYear || comps.month != self->_visibleMonth) {
+            [self jumpToMonth:comps.month year:comps.year];
+            
+            DAYComponentView *newSelectedComponent = [self componentViewForDateComponents:self.tappedDateComponents];
+            
+            //if (self.selectedIndicatorView.hidden) {
+                self.selectedIndicatorView.hidden = NO;
+                self.selectedIndicatorView.transform = CGAffineTransformMakeScale(0, 0);
+                self.selectedIndicatorView.attachingView = newSelectedComponent;
+                [self addConstraintToCenterIndicatorView:self.selectedIndicatorView toView:newSelectedComponent];
+                
+                [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:kNilOptions animations:^{
+                    self.selectedIndicatorView.transform = CGAffineTransformIdentity;
+                    [newSelectedComponent setSelected:YES];
+                } completion:nil];
+            //}
+            
+            self->_selectedDate = [self dateFromDateComponents:self.tappedDateComponents];
+            [self sendActionsForControlEvents:UIControlEventValueChanged];
+
+            
+            return;
+        }
         
         if (self.selectedIndicatorView.hidden) {
             self.selectedIndicatorView.hidden = NO;
-        }
-        if (self.selectedIndicatorView.alpha == 0) {
-            self.selectedIndicatorView.alpha = 1;
-        }
-        
-        self.selectedIndicatorView.transform = CGAffineTransformMakeScale(0, 0);
-        self.selectedIndicatorView.attachingView = sender;
-        [self addConstraintToCenterIndicatorView:self.selectedIndicatorView toView:sender];
-        
-        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:kNilOptions animations:^{
-            self.selectedIndicatorView.transform = CGAffineTransformIdentity;
-            [sender setSelected:YES];
-        } completion:nil];
-    }
-    else {
-        [self addConstraintToCenterIndicatorView:self.selectedIndicatorView toView:sender];
-        
-        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:kNilOptions animations:^{
-            [self.contentWrapperView layoutIfNeeded];
+            self.selectedIndicatorView.transform = CGAffineTransformMakeScale(0, 0);
+            self.selectedIndicatorView.attachingView = sender;
+            [self addConstraintToCenterIndicatorView:self.selectedIndicatorView toView:sender];
             
-            [((DAYComponentView *) self.selectedIndicatorView.attachingView) setSelected:NO];
-            [sender setSelected:YES];
-        } completion:nil];
+            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:kNilOptions animations:^{
+                self.selectedIndicatorView.transform = CGAffineTransformIdentity;
+                [sender setSelected:YES];
+            } completion:nil];
+        }
+        else {
+            [self addConstraintToCenterIndicatorView:self.selectedIndicatorView toView:sender];
+            
+            [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:kNilOptions animations:^{
+                [self.contentWrapperView layoutIfNeeded];
+                
+                [((DAYComponentView *) self.selectedIndicatorView.attachingView) setSelected:NO];
+                [sender setSelected:YES];
+            } completion:nil];
+            
+            self.selectedIndicatorView.attachingView = sender;
+        }
         
-        self.selectedIndicatorView.attachingView = sender;
+        self->_selectedDate = [self dateFromDateComponents:comps];
+        [self sendActionsForControlEvents:UIControlEventValueChanged];
+        
     }
-    
-    self->_selectedDate = [DAYUtils dateFromDateComponents:comps];
-    [self sendActionsForControlEvents:UIControlEventValueChanged];
 }
 
 - (void)updateCurrentVisibleRow {
@@ -588,19 +673,6 @@
     if (self.singleRowMode) {
         if (self->_currentVisibleRow < 5) {
             ++self->_currentVisibleRow;
-            
-            // by Rakuyo. Optimize jump logic
-            NSUInteger totalDays = [DAYUtils daysInMonth:self->_visibleMonth ofYear:self->_visibleYear];
-            NSUInteger paddingDays = [DAYUtils firstWeekdayInMonth:self->_visibleMonth  ofYear:self->_visibleYear] - 1;
-            BOOL flag = (self.componentViews.count - totalDays - paddingDays) >= 7;
-            
-            if (self->_currentVisibleRow == 5 && flag) {
-                ++self->_currentVisibleRow;
-                [self jumpToNextMonth];
-                
-                return;
-            }
-            
             [UIView transitionWithView:self.contentWrapperView duration:0.4 options:UIViewAnimationOptionTransitionFlipFromTop animations:nil completion:nil];
             [self updateCurrentVisibleRow];
             
@@ -628,6 +700,32 @@
     if (self.singleRowMode) {
         [self updateCurrentVisibleRow];
     }
+    
+    
+    
+    if (self->_visibleMonth >= 12) {
+        nextMonth = 1;
+        nextYear = self->_visibleYear + 1;
+    }
+    else {
+        nextMonth = self->_visibleMonth + 1;
+        nextYear = self->_visibleYear;
+    }
+    
+    NSDate *currentDate = [NSDate date];
+
+    NSCalendar *calendar = [self localCalendar];
+    
+    NSInteger currentYear = [calendar component:NSCalendarUnitYear fromDate:currentDate];
+    NSInteger currentMonth = [calendar component:NSCalendarUnitMonth fromDate:currentDate];
+
+    BOOL enableNextButton = ((nextYear < currentYear) || ((nextYear == currentYear) && (nextMonth <= currentMonth)));
+    
+    UIButton *nextButton = self.navigationBar.nextButton;
+    
+    [nextButton setAlpha:(enableNextButton?1.0:0.0)];
+    [nextButton setEnabled:enableNextButton];
+    [nextButton setHidden:!enableNextButton];
 }
 
 - (void)jumpToPreviousMonth {
@@ -638,13 +736,9 @@
             [self updateCurrentVisibleRow];
             
             return;
-        } else {
-            
-            // by Rakuyo. Optimize jump logic
-            NSUInteger totalDays = [DAYUtils daysInMonth:self->_visibleMonth - 1 ofYear:self->_visibleYear];
-            NSUInteger paddingDays = [DAYUtils firstWeekdayInMonth:self->_visibleMonth - 1  ofYear:self->_visibleYear] - 1;
-            
-            self->_currentVisibleRow = ((self.componentViews.count - totalDays - paddingDays) >= 7)?4:5;
+        }
+        else {
+            self->_currentVisibleRow = 5;
         }
     }
     
@@ -665,6 +759,10 @@
     if (self.singleRowMode) {
         [self updateCurrentVisibleRow];
     }
+    
+    [self.navigationBar.nextButton setAlpha:1.0f];
+    [self.navigationBar.nextButton setEnabled:YES];
+    [self.navigationBar.nextButton setHidden:NO];
 }
 
 - (void)jumpToMonth:(NSUInteger)month year:(NSUInteger)year {
@@ -713,6 +811,25 @@
             self.selectedIndicatorView.hidden = YES;
         }
     }];
+    
+    
+    NSUInteger nextMonth = month + 1;
+    NSUInteger nextYear = (month==12)?(year + 1):year;
+    
+    NSDate *currentDate = [NSDate date];
+    
+    NSCalendar *calendar = [self localCalendar];
+    
+    NSInteger currentYear = [calendar component:NSCalendarUnitYear fromDate:currentDate];
+    NSInteger currentMonth = [calendar component:NSCalendarUnitMonth fromDate:currentDate];
+    
+    BOOL enableNextButton = ((nextYear < currentYear) || ((nextYear == currentYear) && (nextMonth <= currentMonth)));
+    
+    UIButton *nextButton = self.navigationBar.nextButton;
+    
+    [nextButton setAlpha:(enableNextButton?1.0:0.0)];
+    [nextButton setEnabled:enableNextButton];
+    [nextButton setHidden:!enableNextButton];
 }
 
 #pragma mark -
@@ -723,5 +840,52 @@
     [self reloadViewAnimated:NO];
 }
 
-@end
 
+
+- (NSCalendar *)localCalendar {
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    calendar.timeZone = self.timeZone;
+    
+    return calendar;
+}
+
+- (NSDate *)dateWithMonth:(NSUInteger)month year:(NSUInteger)year {
+    return [self dateWithMonth:month day:1 year:year];
+}
+
+- (NSDate *)dateWithMonth:(NSUInteger)month day:(NSUInteger)day year:(NSUInteger)year {
+    NSDateComponents *comps = [[NSDateComponents alloc] init];
+    comps.year = year;
+    comps.month = month;
+    comps.day = day;
+    
+    return [self dateFromDateComponents:comps];
+}
+
+- (NSDate *)dateFromDateComponents:(NSDateComponents *)components {
+    return [[self localCalendar] dateFromComponents:components];
+}
+
+- (NSUInteger)daysInMonth:(NSUInteger)month ofYear:(NSUInteger)year {
+    NSDate *date = [self dateWithMonth:month year:year];
+    return [[self localCalendar] rangeOfUnit:NSCalendarUnitDay inUnit:NSCalendarUnitMonth forDate:date].length;
+}
+
+- (NSUInteger)firstWeekdayInMonth:(NSUInteger)month ofYear:(NSUInteger)year {
+    NSDate *date = [self dateWithMonth:month year:year];
+    return [[self localCalendar] component:NSCalendarUnitWeekday fromDate:date];
+}
+
+- (NSDateComponents *)dateComponentsFromDate:(NSDate *)date {
+    return [[self localCalendar] components:(NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay) fromDate:date];
+}
+
+- (BOOL)isDateTodayWithDateComponents:(NSDateComponents *)dateComponents {
+    NSDateComponents *todayComps = [self dateComponentsFromDate:[NSDate dateWithTimeIntervalSinceNow:0]];
+    
+    return todayComps.year == dateComponents.year && todayComps.month == dateComponents.month && todayComps.day == dateComponents.day;
+}
+
+
+
+@end
